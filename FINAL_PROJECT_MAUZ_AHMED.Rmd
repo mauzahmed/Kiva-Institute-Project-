@@ -1,0 +1,240 @@
+---
+title: "Final Project - Kiva"
+author: "Mauz Ahmed"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+#Objective 
+Kiva is a 501© nonprofit organization that provides loans that serves within 80 countries, a ton of which in both Asia and Africa. Because they are a nonprofit they rely heavily on grants, donations, and fees to run their platform. Within this research project, I plan to utilize all of the data sources above and focus directly on the utilization and outcomes of Kiva loans to countries that they lend to specifically outside the United States. Using R I will specifically be using packages such as dplyr, and ggplot2 for both data manipulation, and visualization making for a comprehensive yet refined project. I want to serve this project correctly, as I hope to understand the socioeconomical impact that non-profits such as Kiva can have on developing countries and help answer questions such as should these non-profits receive more funding or are they not worth our time. Later on, I will also go in depth and provide barplots showcasing the sectors that got the most funding during the Great Recession of 2008 to show how Kiva operates during times of financial hardship. 
+
+```{r setup, echo = FALSE}
+library(tidyverse)
+library(jsonlite)
+library(httr)
+library(ghql)
+```
+
+##Importing necessary data 
+For these datasets, I used https://www.kaggle.com/datasets/kiva/data-science-for-good-kiva-crowdfunding?resource=download , https://www.kaggle.com/datasets/gaborfodor/additional-kiva-snapshot/data , and https://stat.duke.edu/datasets/kiva-loans to gather data from. Some of them were much larger datasets than the others so if you use this yourself be prepared with your R studio taking 5-10 minutes at least to load and get ready. 
+```{r data, echo=FALSE}
+country_stats <- read_csv("country_stats.csv")
+GEconV4 <- read_csv("GEconV4.csv")
+kiva_loans <- read_csv("kiva_loans.csv")
+kiva_mpi <- read_csv("kiva_mpi_region_locations.csv")
+lenders <- read_csv("lenders.csv")
+loan_coords <- read_csv("loan_coords.csv")
+loan_theme <- read_csv("loan_theme_ids.csv")
+loans <- read_csv("loans.csv")
+locations <- read_csv("locations.csv")
+```
+
+##Utilizing the API 
+For this assignment, Kiva utilizes GraphiQL and within it: I've created a queries dedicated to finding loans by sectors, by repayment terms, by countries, and more to really sift through this data and help answer questions people may have from who is receiving these loans, to which country, and for what cause. This next code chunk will allow the user to add an a query from GraphiQL, send the request back to KIVA, and check the data. For this API you have the ability to adjust the query to your liking filtering by gender, which specific countries, limiting the results to a certain number of loans, the details, name/group, and etc. 
+
+###Links I want to reference 
+https://ropensci.org/blog/2020/12/08/accessing-graphql-in-r/
+https://gabrielcp.medium.com/interacting-with-a-graphql-api-with-r-b53f0f76d3f4
+I used both of these websites to help me with my answer.
+
+```{r api, echo=FALSE}
+link <- 'https://api.kivaws.org/graphql'
+
+conn <- GraphqlClient$new(url = link)
+
+query <- '
+{
+  lend {
+    loans (
+      filters: {
+        gender: female,
+        country: ["KE", "UG", "IN", "PH"]
+      },
+      limit: 20
+    ) {
+      totalCount
+      values {
+        name
+        loanAmount
+        paidAmount
+        sector {
+          id
+        }
+        borrowerCount
+        use
+        image {
+          url(presetSize: small)
+        }
+        activity {
+          name
+        }
+        geocode {
+          country {
+            isoCode
+            name
+          }
+        }
+        lenders {
+          totalCount
+        }
+      }
+    }
+  }
+}'
+
+
+new <- Query$new()
+new$query('getLoans', query)
+
+# variables <- list(
+#   countryCode = "KE"  
+# )
+
+result <- conn$exec(new$queries$getLoans, variables = variables) %>%
+  fromJSON(flatten = TRUE)
+
+loans_data <- result$data$lend$loans$values %>%
+  as_tibble()
+
+print(loans_data)
+
+```
+
+##Cleaning The Data from Kaggle Datsets and Examining
+
+```{r clean, echo = FALSE}
+# str(loans)
+# str(country_stats)
+# str(GEconV4)
+# str(kiva_loans)
+# str(kiva_mpi)
+# str(lenders)
+# str(loan_coords)
+# str(loan_theme)
+# str(locations)
+
+african_countries <- country_stats %>%
+  filter(continent == "Africa") %>%
+  pull(country_code)
+  
+asian_countries <- country_stats %>%
+  filter(continent == "Asia") %>%
+  pull(country_code)
+
+kiva_loans_africa <- kiva_loans %>%
+  filter(country_code %in% african_countries)
+
+kiva_loans_asia <- kiva_loans %>%
+  filter(country_code %in% asian_countries)
+
+kiva_loans_africa <- kiva_loans %>%
+  filter(country_code %in% african_countries) %>%
+  select(funded_amount, loan_amount, activity, sector, use, country_code, country_name = country, currency, borrower_genders, lender_count) %>% 
+  drop_na()
+
+kiva_loans_asia <- kiva_loans %>%
+  filter(country_code %in% asian_countries) %>%
+  select(funded_amount, loan_amount, activity, sector, use, country_code, country_name = country, currency, borrower_genders, lender_count) %>% 
+  drop_na()
+
+kiva_loans_africa <- kiva_loans_africa %>%
+  mutate(loan_to_funding_ratio = funded_amount / loan_amount,
+         average_loan_per_borrower = funded_amount / lender_count)
+
+kiva_loans_asia <- kiva_loans_asia %>%
+  mutate(loan_to_funding_ratio = funded_amount / loan_amount,
+         average_loan_per_borrower = funded_amount / lender_count)
+
+african_summary <- kiva_loans_africa %>%
+  group_by(country_code) %>%
+  summarise(total_loaned = sum(funded_amount),
+            average_loan = mean(funded_amount),
+            total_borrowers = sum(lender_count))
+
+asian_summary <- kiva_loans_asia %>%
+  group_by(country_code) %>%
+  summarise(total_loaned = sum(funded_amount),
+            average_loan = mean(funded_amount),
+            total_borrowers = sum(lender_count))
+
+print(african_summary)
+print(asian_summary)
+
+```
+
+##Creating Plots Around Asia & Africa
+I wanted to showcase which sectors were getting the most funding in both African and Asian countries, I was able to do so by filtering the continent in the earlier code chunk and then filtering that in my new data frame and then finally creating a new data frames called africa_sector and asia_sector respectively. For Africa Sectors we can see that wholesaling was the leading sector, and as for Education was the leading sector.
+```{r PLOT, echo = FALSE}
+africa_sector <- kiva_loans_africa %>%
+  group_by(sector) %>%
+  summarise(average_loan_amount = mean(funded_amount, na.rm = TRUE),
+            total_loans = n()) %>%
+  arrange(desc(average_loan_amount))
+
+# print(africa_sector)
+
+ggplot(africa_sector, aes(x = reorder(sector, average_loan_amount), y = average_loan_amount)) +
+  geom_bar(stat = "identity", fill = "red") +
+  labs(title = "Average Loan Amount by Sector Within Africa",
+       x = "Sector",
+       y = "AVG Loan Amount $$") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+asia_sector <- kiva_loans_asia %>%
+  group_by(sector) %>%
+  summarise(average_loan_amount = mean(funded_amount, na.rm = TRUE),
+            total_loans = n()) %>%
+  arrange(desc(average_loan_amount))
+
+# print(asia_sector)
+
+ggplot(asia_sector, aes(x = reorder(sector, average_loan_amount), y = average_loan_amount)) +
+  geom_bar(stat = "identity", fill = "red") +
+  labs(title = "Average Loan Amount by Sector Within Asia",
+       x = "Sector",
+       y = "AVG Loan Amount $$") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+##Searching for Information Correlated Around Great Recession
+Finally, I think it's important to see just how KIVA adjusts their loan processes during times of great economic downturn such as the Great Recession of 2008. Especially for a non-profit operating out of San Francisco it's incredible to see a non-profit taking initiative and continuing to help other countries especially when their own country is falling victim to socioeconomic challenges. Specifically, we can see that during 2008, food was an utmost priority as they were giving loans to this sector the most. However, if we look more recently in 2014, we can see that the loan amount was much greater overall, and Agriculture managed to flip Food in terms of loan amount.  
+```{r RECESSION, echo = FALSE}
+kiva_loans_2008 <- loans %>%
+  filter(format(as.Date(posted_time), "%Y") == "2008")
+
+sector_analysis_2008 <- kiva_loans_2008 %>%
+  group_by(sector_name) %>%
+  summarise(TotalLoanAmount = sum(loan_amount, na.rm = TRUE)) %>%
+  arrange(desc(TotalLoanAmount))
+
+
+ggplot(sector_analysis_2008, aes(x = reorder(sector_name, TotalLoanAmount), y = TotalLoanAmount)) +
+  geom_bar(stat = "identity", fill = 'blue') +
+  labs(title = "Loan Amount Distribution by Sector in 2008",
+       x = "Sector",
+       y = "Total Loan Amount") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+kiva_loans_2014 <- loans %>%
+  filter(format(as.Date(posted_time), "%Y") == "2014")
+
+sector_analysis_2014 <- kiva_loans_2014 %>%
+  group_by(sector_name) %>%
+  summarise(TotalLoanAmount = sum(loan_amount, na.rm = TRUE)) %>%
+  arrange(desc(TotalLoanAmount))
+
+ggplot(sector_analysis_2014, aes(x = reorder(sector_name, TotalLoanAmount), y = TotalLoanAmount)) +
+  geom_bar(stat = "identity", fill = 'black') +
+  labs(title = "Loan Amount Distribution by Sector in 2014",
+       x = "Sector",
+       y = "Total Loan Amount") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+#Conclusion
+
+Overall, this work was extremely riveting. I was able to take what I've learned through this course and apply it to this project. Further down the line, I hope to add more to this project by including some regression models, prediction formulas and such. However, I do believe my findings provide good insight into Kiva and could help people learn more. 
